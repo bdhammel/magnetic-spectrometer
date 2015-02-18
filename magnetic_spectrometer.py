@@ -45,6 +45,9 @@ dt = 1.*10**-9 # Time step (s)
 
 class Electron(object):
 
+    _m_0 = m_e # 9.10938291e-31 kg  rest mass of electron
+    _q = e # 1.602176565e-19 Coulombs
+
     def __init__(self, energy):
         self._position = [0.,0.,0.] # (x,y,z) m
         self._direction = [0.,1.,0.] # (vx_hat, vy_hat, vz_hat) m/s
@@ -57,27 +60,25 @@ class Electron(object):
         return 1./np.sqrt(1.-self.speed**2/c**2)
 
     def energy(self, units='eV'):
-        """Return the energy of the electron with appropriate units
+        """Return the energy of the particle with appropriate units
         """
         return self._energy*CONVERT_TO_UNITS[units]
 
     @property
     def q(self):
-        """Charge of the electron
-        1.602176565e-19 Coulombs
+        """Charge of the particle 
         """
         return e
 
     @property
     def m_0(self):
-        """Mass of the electron at rest.
-        9.10938291e-31 kg 
+        """Rest mass of the particle
         """
-        return m_e
+        return self._m_0
 
     @property
     def m(self):
-        """Relativistic mass of the electron
+        """Relativistic mass of the particle
         gamma*m_0  w/ m_0 = rest mass
 
         Units: 
@@ -87,7 +88,7 @@ class Electron(object):
 
     @property
     def speed(self):
-        """The relativistic speed of the electron
+        """The relativistic speed of the particle
         Solution from E = mc^2(gamma-1)
 
         Units: 
@@ -111,18 +112,18 @@ class Electron(object):
         return np.array(self._direction)
 
     def set_direction(self, new_direction):
-        """Set the direction attribute of the electron
+        """Set the direction attribute of the particle
 
         Normalize the direction in case the vector passed is not a unit vector 
         """
         if new_direction[2] != 0.0:
             raise ValueError("non-zero z-component of direction")
 
-        self._direction = np.array(new_direction)/np.linag.norm(new_direction)
+        self._direction = np.array(new_direction)/np.linalg.norm(new_direction)
 
     @property
     def position(self):
-        """The current position of the electron 
+        """The current position of the particle 
 
         assert that the position never has a z component 
 
@@ -137,7 +138,7 @@ class Electron(object):
         return np.array(self._positon)
 
     def set_position(self, new_position):
-        """Set the position vector of the electron
+        """Set the position vector of the particle
 
         Raise exception if new_position has non-zero z-component
         """
@@ -252,10 +253,25 @@ class Magnet(object):
 
 
 class Detector(object):
+    """Faraday Cup
+
+    All faraday cups are located on a 10 cm radius with the origin located at 
+    the far side of the magnet (the opposite side from which electrons enter). 
+    The coordinate transformation from electron position to the Faraday
+    coor-system is then:
+        e coor-sys -> fc coor-sys :(x,y) -> (x,y-y_max) = (x',y')
+
+    Attributes:
+        apature (float): The opening of the faraday cup
+        placment (float): The location of the faraday cup in degrees
+        electrons_captured (Electron): array of all electrons that intercect the
+            faraday cup
+    """
 
     _apature = 10**(-3) # mm aperture
 
-    def __init__(self):
+    def __init__(self, placment):
+        self._placment = placment
         self._electrons_captured = []
 
     def tally_electron(self, electron):
@@ -277,8 +293,6 @@ class Detector(object):
         """read out the analysis
         """
         pass
-
-
 
 
 def import_magnet_data():
@@ -347,14 +361,10 @@ def average_layers(magnet):
 
     return averaged_field
 
-
 def update_direction(electron, magnet):
     """Solution to d/dt(gamma*m*v)=q/c*vxB for constant speed
 
     v=s*d_hat
-
-    The effect of the magnetic field on the electron is inversely proportional 
-    to the relativistic mass of the electron m=gamma*m_0
 
     Args:
         electron (Electron object): electron at current location and direction 
@@ -363,14 +373,12 @@ def update_direction(electron, magnet):
     Return:
         electron (Electron object): with updated direction unit-vector
 
-    NOTE( Is it even necessary to keep track of the constants? The direction 
-    vector will be normalized anyways?)
     """
     alpha = electron.q/(electron.m*c) 
     b_field = magnet.field_strength_at_location(electron.position)
     dxB = np.cross(electron.direction, b_field)
     new_direction = alpha*dxB*dt+electron.direction
-    electron.set_direction(new_direction/np.linag.norm(new_direction))
+    electron.set_direction(new_direction/np.linalg.norm(new_direction))
     return electron
 
 def update_position(electron):
@@ -387,7 +395,6 @@ def update_position(electron):
     electron.set_position(new_position)
     return electron
 
-
 def electron_from_random_source():
     """Generate an electron from a random source
     """
@@ -398,6 +405,8 @@ def electron_from_random_source():
     return electron
 
 def step(electron, magnet):
+    """Increment the simulation by one time step
+    """
     electron = update_direction(electron, magnet)
     electron = update_position(electron)
     return electron
