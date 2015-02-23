@@ -11,6 +11,7 @@ import xlrd
 import warnings
 import numpy as np
 import matplotlib.pyplot as plt
+from multiprocessing import Pool
 
 ################################################################################
 #                               Constants                                      #
@@ -592,6 +593,9 @@ def simulate_trajectory(electron, magnet, mode='eulerian'):
 
 
 def run_traces(magnetic_field):
+    pass
+
+if __name__ == '__main__':
     """Run the Simulation
 
     Generate an electron from a random source, and move it through the applied
@@ -603,36 +607,35 @@ def run_traces(magnetic_field):
     Print out the final report
     """
 
+    #Import magnetic field from excel file and run simulation
+    magnetic_field = import_magnet_data()
+    averaged_field = average_layers(magnetic_field)
     magnet = Magnet(magnetic_field)
+
+    pool = Pool()
+
     detector_array = set_up_detector_array(magnet)
     data = {'energy':[], 'angle':[]}
 
-    for particle_number in range(1,PARTICLES + 1):
-        electron = electron_from_random_source()
+    electron_source = [electron_from_random_source() 
+                        for i in range(1,PARTICLES + 1)]
 
-        electron = simulate_trajectory(electron, magnet)
+    processes = [pool.apply_async(simulate_trajectory(electron, magnet))
+                        for electron in electron_source] 
 
-        data['energy'].append(electron.energy('eV'))
-        data['angle'].append(np.arctan(electron.direction[1]/electron.direction[0]))
-        
+    electrons = [p.get() for p in processes]
+
+    for electron in electrons:
         for detector in detector_array:
             detector.collision_detected(electron)
 
-        if particle_number % (PARTICLES/20) == 0:
-            completed_percent =  float(particle_number)/PARTICLES*100
-            print("\n\n" + "-"*50)
-            print("{}% completed".format(completed_percent))
-            map(lambda x: x.report(), detector_array)
+    #if particle_number % (PARTICLES/20) == 0:
+    #    completed_percent =  float(particle_number)/PARTICLES*100
+    #    print("\n\n" + "-"*50)
+    #    print("{}% completed".format(completed_percent))
+    #    map(lambda x: x.report(), detector_array)
 
-    return {'detectors':detector_array, 'data':data}
-
-if __name__ == '__main__':
-    """Import magnetic field from excel file and run simulation
-    """
-    magnetic_field = import_magnet_data()
-    averaged_field = average_layers(magnetic_field)
-    data = run_traces(averaged_field)
+    data =  {'detectors':detector_array, 'data':data}
     final_report(data)
-
 
 
