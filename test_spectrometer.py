@@ -248,14 +248,19 @@ class SimulationTestCase(unittest.TestCase):
                                 )
 
     def test_average_field(self):
+        """Check trajectory through a field of strength .08 T ~ the average field
+        strength of the magnet. Compare to analytical solution 
+        """
         x_max = 25 * 10**(-3) # m
         y_max = 14 * 10**(-3) # m
         field = np.empty((11,6))
-        field.fill(.08)
+        field_strength = .08
+        field.fill(field_strength)
         magnet = Magnet(field, (x_max, y_max, 0.))
-        electron = Electron(energy=10**4)
-
-
+        electron = Electron(energy=5*10**5)
+        phi = np.arccos(y_max*electron.q*field_strength/(electron.m*electron.speed))
+        electron = simulate_trajectory(electron, magnet)
+        nptest.assert_approx_equal(electron.phi*180/np.pi, phi*180/np.pi)
 
 
 if __name__ == '__main__':

@@ -32,7 +32,9 @@ CONVERT_TO_UNITS = {
 #                               Parameters                                     #
 ################################################################################
 
-PARTICLES = 10**2
+PARALLEL = True
+PARTICLES = 10**5
+BLOCK_NUMBER = 10
 PINHOLE_DIAMETER = 7 # mm
 CROSS_POINT = 70 # mm   - distance from pinhole to the wire cross point
 MAGNETIC_MAPPING_FILE = './magnetic_mapping.xlsx' # location of magnet excel file  
@@ -52,8 +54,8 @@ class Electron(object):
     _q = e # 1.602176565e-19 Coulombs
 
     def __init__(self, energy=10**3, position=(0,0,0), direction=(0,1,0)):
-        self._position = np.array(position, dtype='float') # (x,y,z) m
-        self._direction = np.array(direction, dtype='float') # (vx_hat, vy_hat, vz_hat) m/s
+        self.set_position(np.array(position, dtype='float')) # (x,y,z) m
+        self.set_direction(np.array(direction, dtype='float')) # (vx_hat, vy_hat, vz_hat) m/s
         self._energy = float(energy) # eV
 
     def gamma(self):
@@ -114,6 +116,12 @@ class Electron(object):
             raise ValueError("non-zero z-component of direction")
         return np.array(self._direction)
 
+    @property
+    def phi(self):
+        """angle from the x axis in radians
+        """
+        return np.arctan(self.direction[1]/self.direction[0])
+
     def set_direction(self, new_direction):
         """Set the direction attribute of the particle
 
@@ -145,8 +153,8 @@ class Electron(object):
 
         Raise exception if new_position has non-zero z-component
         """
-        if new_position[2] != 0.0:
-            raise ValueError("non-zero z-component of position")
+        if len(new_position) < 3:
+            raise ValueError("Position needs to be in 3 dimensions")
         self._position = np.array(new_position)
 
 
@@ -271,7 +279,7 @@ class Detector(object):
             faraday cup
     """
 
-    _aperture = 10**(-2) # m  a 1 cm aperture
+    _aperture = 2*10**(-2) # m  a 1 cm aperture
     _distance_from_origin = 10**(-1) # m 10 cm away from the origin
 
     def __init__(self, placement, magnet):
@@ -372,11 +380,13 @@ class Detector(object):
         """
         analysis = self.analyze()
         template = '''
+        \n
         Detector location: {placement} deg
         {count} number of tallies
         maximum captured energy: {max} eV
         minimum captured energy: {min} eV
         Average captured energy: {mean} eV
+        \n
         '''
         print(template.format(placement=self.placement, **analysis))
 
@@ -452,6 +462,8 @@ def average_layers(magnet):
 
 
 def runge_kutta_step(electron, magnet):
+    """
+    """
 
     def acceleration(direction, position):
         alpha = electron.q/(electron.m*c) 
@@ -533,12 +545,10 @@ def electron_from_random_source():
         """Generate a random energy value between e_min and e_max
 
         Args:
-            min (int): multiplier for the minimum range i.e. 3 for keV
-            max (int): multiplier for the maximum range i.e. 6 for MeV
+            min (int): minimum val in keV
+            max (int): maximum val in keV
         """
-        # generate random energy electrons between 1 keV and 1 MeV
-        energy = np.random.random() * 10 ** (np.random.random_integers(e_min,e_max)) 
-        return energy 
+        return np.random.uniform(e_min, e_max) * 10**3
 
     def random_angle_generator(positive_and_negative=True):
         """Generate a random launch angle for the electron
@@ -552,7 +562,7 @@ def electron_from_random_source():
             phi += np.random.choice([0.,np.pi/2.])
         return phi 
 
-    energy = random_energy_generator(4,6)
+    energy = random_energy_generator(100,1000)
     phi = random_angle_generator()
     direction = (np.cos(phi), np.sin(phi), 0.)  
     position = (0.,0.,0.)
@@ -577,23 +587,55 @@ def final_report(data):
     """
     d = data['data']
     plt.ion()
-    plt.plot(np.array(d['angle'])*180./np.pi,d['energy'], 'ro')
-    plt.yscale('log')
+    plt.close('all')
+    plt.plot(np.array(d['angle'])*180./np.pi,np.array(d['energy'])/1000., 'ro')
+    plt.xlabel("Degrees")
+    plt.ylabel("Energy (keV)")
+    #plt.yscale('log')
     plt.draw()
 
-def simulate_trajectory(electron, magnet, mode='eulerian'):
+def summary_report(histories, detector_array):
+    """Print update of simulation to console
+    """
+    completed_percent =  float(histories)/PARTICLES*100
+    print("\n\n" + "-"*50)
+    print("{}% completed".format(int(completed_percent)))
+    map(lambda x: x.report(), detector_array)
 
+def simulate_trajectory(electron, magnet, mode='eulerian'):
+    """Move the electron forward using the appropriate scheme
+
+    NOTE(RK method isn't working...)
+
+    Check to make sure the angle of the electron is such that it doesn't get 
+    caught in the magnetic field. 
+    """
     while magnet.is_in_bounds(electron.position):
-        if mode == 'eulerian':
-            eularian_step(electron, magnet)
-        elif mode == 'RK':
-            runge_kutta_step(electron, magnet)
+        if electron.phi < np.pi and electron.phi > 0.:
+            if mode == 'eulerian':
+                eularian_step(electron, magnet)
+            elif mode == 'RK':
+                runge_kutta_step(electron, magnet)
+        else:
+            print("electron with energy ~ {:.3} keV caught in loop".format(
+                                    electron.energy()/1000))
+            return None
 
     return electron
 
 
 def run_traces(magnetic_field):
-    pass
+    """Run traces, if electron is caught in field None is returned. Assign another
+    energy to the electron and run again
+    """
+
+    electron = None
+
+    while electron is None:
+        electron = electron_from_random_source()
+        electron = simulate_trajectory(electron, magnet)
+
+    return electron
 
 if __name__ == '__main__':
     """Run the Simulation
@@ -609,31 +651,35 @@ if __name__ == '__main__':
 
     #Import magnetic field from excel file and run simulation
     magnetic_field = import_magnet_data()
-    averaged_field = average_layers(magnetic_field)
-    magnet = Magnet(magnetic_field)
+    averaged_field = average_layers(magnetic_field)*.1 # imported field in kgauss
+    magnet = Magnet(averaged_field)
 
     pool = Pool()
 
     detector_array = set_up_detector_array(magnet)
     data = {'energy':[], 'angle':[]}
+    block_end = int(PARTICLES/BLOCK_NUMBER)
+    histories = 0
 
-    electron_source = [electron_from_random_source() 
-                        for i in range(1,PARTICLES + 1)]
+    while histories < PARTICLES:
 
-    processes = [pool.apply_async(simulate_trajectory(electron, magnet))
-                        for electron in electron_source] 
+        if PARALLEL:
+            # start simulation in parallel on all available processors 
+            processes = [pool.apply_async(run_traces, [magnet]) 
+                                for e in range(block_end)]
+            electrons = [p.get() for p in processes]
+        else:
+            electrons = [run_traces(magnet) for e in range(block_end)]
 
-    electrons = [p.get() for p in processes]
+        # record information for each electron in the run
+        for electron in electrons:
+            data['energy'].append(electron.energy())
+            data['angle'].append(electron.phi)
+            for detector in detector_array:
+                detector.collision_detected(electron)
 
-    for electron in electrons:
-        for detector in detector_array:
-            detector.collision_detected(electron)
-
-    #if particle_number % (PARTICLES/20) == 0:
-    #    completed_percent =  float(particle_number)/PARTICLES*100
-    #    print("\n\n" + "-"*50)
-    #    print("{}% completed".format(completed_percent))
-    #    map(lambda x: x.report(), detector_array)
+        histories += len(electrons)
+        summary_report(histories, detector_array) 
 
     data =  {'detectors':detector_array, 'data':data}
     final_report(data)
