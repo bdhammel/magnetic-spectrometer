@@ -8,7 +8,9 @@ Requirements
 ################################################################################
 
 import xlrd
+import warnings
 import numpy as np
+import matplotlib.pyplot as plt
 
 ################################################################################
 #                               Constants                                      #
@@ -29,13 +31,13 @@ CONVERT_TO_UNITS = {
 #                               Parameters                                     #
 ################################################################################
 
-PARTICLES = 10**6
-PINHOLE_DIAMETER = 1 # mm
-CROSS_POINT = 10 # mm   - distance from pinhole to the wire cross point
+PARTICLES = 10**2
+PINHOLE_DIAMETER = 7 # mm
+CROSS_POINT = 70 # mm   - distance from pinhole to the wire cross point
 MAGNETIC_MAPPING_FILE = './magnetic_mapping.xlsx' # location of magnet excel file  
-MAGNET_WIDTH = 25 # mm
-MAGNET_LENGTH = 14 # mm
-dt = 1.*10**-9 # Time step (s)
+MAGNET_WIDTH = 25 * 10**(-3) # m
+MAGNET_LENGTH = 14 * 10**(-3) # m
+dt = 1.*10**-13 # Time step (s) 
 
 
 
@@ -48,10 +50,10 @@ class Electron(object):
     _m_0 = m_e # 9.10938291e-31 kg  rest mass of electron
     _q = e # 1.602176565e-19 Coulombs
 
-    def __init__(self, energy):
-        self._position = [0.,0.,0.] # (x,y,z) m
-        self._direction = [0.,1.,0.] # (vx_hat, vy_hat, vz_hat) m/s
-        self._energy = energy*10**3 # eV
+    def __init__(self, energy=10**3, position=(0,0,0), direction=(0,1,0)):
+        self._position = np.array(position, dtype='float') # (x,y,z) m
+        self._direction = np.array(direction, dtype='float') # (vx_hat, vy_hat, vz_hat) m/s
+        self._energy = float(energy) # eV
 
     def gamma(self):
         """Lorentz factor
@@ -68,7 +70,7 @@ class Electron(object):
     def q(self):
         """Charge of the particle 
         """
-        return e
+        return self._q
 
     @property
     def m_0(self):
@@ -128,14 +130,14 @@ class Electron(object):
         assert that the position never has a z component 
 
         Units:
-            mm 
+            m
 
         Return:
             numpy array of the form [x,y,z]
         """
         if self._position[2] != 0.0:
             raise ValueError("non-zero z-component of position")
-        return np.array(self._positon)
+        return np.array(self._position)
 
     def set_position(self, new_position):
         """Set the position vector of the particle
@@ -215,7 +217,7 @@ class Magnet(object):
         i_count, j_count = map(float, self.logic_count)
         x_max, y_max, z_max = self.physical_dimensions()
         i = int(np.rint(x*i_count/x_max + i_max/2.))
-        j = int(np.rint(y*j_max/y_max))
+        j = int(np.rint(y*j_count/y_max - .5))
         return (i,j)
 
     def field_strength_at_location(self, position):
@@ -262,37 +264,120 @@ class Detector(object):
         e coor-sys -> fc coor-sys :(x,y) -> (x,y-y_max) = (x',y')
 
     Attributes:
-        apature (float): The opening of the faraday cup
-        placment (float): The location of the faraday cup in degrees
-        electrons_captured (Electron): array of all electrons that intercect the
+        aperture (float): The opening of the faraday cup
+        placement (float): The location of the faraday cup in degrees
+        electrons_captured (Electron): array of all electrons that intersect the
             faraday cup
     """
 
-    _apature = 10**(-3) # mm aperture
+    _aperture = 10**(-2) # m  a 1 cm aperture
+    _distance_from_origin = 10**(-1) # m 10 cm away from the origin
 
-    def __init__(self, placment):
-        self._placment = placment
+    def __init__(self, placement, magnet):
+        self._placement = placement
         self._electrons_captured = []
+        self._y_shift = magnet.physical_dimensions()[1]
+        self._r = self.distance*np.array([np.cos(self.theta),np.sin(self.theta),0.])
+
+    @property
+    def apature(self):
+        """The opening of the faraday cup 
+        """
+        return self._aperture
+
+    @property
+    def placement(self):
+        """The location of the detector in degrees
+        """
+        return self._placement
+
+    @property
+    def theta(self):
+        """The location of the detector in radians
+        """
+        return self.placement*np.pi/180.
+
+    @property
+    def vector_location(self):
+        """Return the vector location of the detector
+        r = |r|<cos theta, sin theta>
+        wherein
+            r = distance from origin
+            theta = placement
+        """
+        return self._r
+
+    @property
+    def distance(self):
+        """The distance away from the origin
+        """
+        return self._distance_from_origin
 
     def tally_electron(self, electron):
         """Append electron to the tally
         """
         self._electrons_captured.append(electron)
 
-    def collesion_detected(self, electron):
+    @property
+    def electrons_captured(self):
+        """Return an array of all electron objects that have entered the FC
+        """
+        return self._electrons_captured
+
+    def detector_coor_sys(self, position):
+        """Shift the coordinate system to the far edge of the magnet
+        """
+        return position - np.array([0., self._y_shift, 0.])
+
+    def collision_detected(self, electron, return_percent=False):
         """Does an electron intersect the detector
         """
+        p = self.detector_coor_sys(electron.position)
+        r_p_vec = self._r - p
+        r_p_mag = np.linalg.norm(r_p_vec)
+        phi = self.apature/(2*r_p_mag)
+        dhp = np.dot(electron.direction, r_p_vec)/r_p_mag
 
-        if True:
-            self.tally_electron(electron)
+        if return_percent:
+            return dhp
+        else:
+            if dhp >= np.cos(phi):
+                self.tally_electron(electron)
+                return True
+            else:
+                return False
 
     def analyze(self):
-        pass
+        """Return an analysis of the electrons captured by the cup
+        """
+        analysis = {}
+        energies = np.fromiter(
+                map(lambda x:x.energy(), self.electrons_captured),
+                dtype=float
+                )
+        if len(energies)>0:
+            analysis['energies'] = energies
+            analysis['count'] = len(energies)
+            analysis['max'] = energies.max()
+            analysis['min'] = energies.min()
+            analysis['mean'] = energies.mean()
+        else:
+            analysis = None
+
+        return analysis
     
     def report(self):
-        """read out the analysis
+        """Read out the analysis
         """
-        pass
+        analysis = self.analyze()
+        template = '''
+        Detector location: {placement} deg
+        {count} number of tallies
+        maximum captured energy: {max} eV
+        minimum captured energy: {min} eV
+        Average captured energy: {mean} eV
+        '''
+        print(template.format(placement=self.placement, **analysis))
 
 
 def import_magnet_data():
@@ -307,6 +392,7 @@ def import_magnet_data():
     layer = []
     layers = []
     layer_name = None
+
 
     while True:
         row = sheet.row_values(n) 
@@ -324,7 +410,7 @@ def import_magnet_data():
         except (IndexError, AttributeError):
              # If we are in a layer, and the line is not empty, read in the data
             if layer_name and row[0]:
-                data = np.array(row[2:], dtype='S9')
+                data = np.array(row[2:], dtype='U9')
                 data[data == ''] = np.nan # convert empty strings to nan
                 layer.append(data.astype(float))
 
@@ -347,7 +433,7 @@ def average_layers(magnet):
     Nan's are ignored in the averaging. If all values are nan then the average 
     is saved as 0
     """
-    i_length, j_length, k_length = magnet.shape()
+    i_length, j_length, k_length = magnet.shape
 
     averaged_field = np.zeros((i_length, j_length))
 
@@ -355,73 +441,198 @@ def average_layers(magnet):
         for j in range(j_length):
             # take that average for a given i,j location over all z values, 
             # ignore nan's
-            averaged_value = np.nanmean(magnet[i,j,:])
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                averaged_value = np.nanmean(magnet[i,j,:])
             if not np.isnan(averaged_value):
                 averaged_field[i,j] = averaged_value
 
     return averaged_field
 
-def update_direction(electron, magnet):
-    """Solution to d/dt(gamma*m*v)=q/c*vxB for constant speed
 
-    v=s*d_hat
+def runge_kutta_step(electron, magnet):
 
-    Args:
-        electron (Electron object): electron at current location and direction 
-        magnet (Magnet object): The current magnetic field being used in the 
-            simulation
-    Return:
-        electron (Electron object): with updated direction unit-vector
+    def acceleration(direction, position):
+        alpha = electron.q/(electron.m*c) 
+        b_field = magnet.field_strength_at_location(position)
+        dxB = np.cross(direction, b_field)
+        return alpha*dxB
 
-    """
-    alpha = electron.q/(electron.m*c) 
-    b_field = magnet.field_strength_at_location(electron.position)
-    dxB = np.cross(electron.direction, b_field)
-    new_direction = alpha*dxB*dt+electron.direction
-    electron.set_direction(new_direction/np.linalg.norm(new_direction))
-    return electron
+    def direction(position):
+        k1=dt*acceleration(electron.direction, position)
+        k2=dt*acceleration(electron.direction+k1/2., position)
+        k3=dt*acceleration(electron.direction+k2/2., position)
+        k4=dt*acceleration(electron.direction+k3, position)
+        new_direction = electron.direction + 1/6.*(k1+2*k2+2*k3+k4)
+        return new_direction/np.linalg.norm(new_direction) 
 
-def update_position(electron):
-    """increment the position of the electron given its current speed, direction,
-    and time-step used 
+    def position():
+        try:
+            k1=dt*electron.speed*direction(electron.position)
+            k2=dt*electron.speed*direction(electron.position+k1/2.)
+            k3=dt*electron.speed*direction(electron.position+k2/2.)
+            k4=dt*electron.speed*direction(electron.position+k3)
+        except IndexError:
+            dx = electron.speed * electron.direction * dt
+            return dx + electron.position 
+        else:
+            return electron.position+1/6.*(k1+2*k2+2*k3+k4)
 
-    x_f = speed*direction*dt + x_i
-
-    Return:
-        electron (Electron object): with updated position vector
-    """
-    dx = electron.speed*electron.direction.dt
-    new_position = dx + electron.position 
+    new_direction = direction(electron.position)
+    new_position = position()
+    electron.set_direction(new_direction)
     electron.set_position(new_position)
+
+
+def eularian_step(electron, magnet):
+
+    def update_direction(electron, magnet):
+        """Solution to d/dt(gamma*m*v)=q/c*vxB for constant speed
+
+        v=s*d_hat
+
+        Args:* energy_multiplyer
+            electron (Electron object): electron at current location and direction 
+            magnet (Magnet object): The current magnetic field being used in the 
+                simulation
+        Return:
+            electron (Electron object): with updated direction unit-vector
+
+        """
+        alpha = electron.q/(electron.m) 
+        b_field = magnet.field_strength_at_location(electron.position)
+        dxB = np.cross(electron.direction, b_field)
+        new_direction = alpha*dxB*dt+electron.direction
+        electron.set_direction(new_direction/np.linalg.norm(new_direction))
+
+    def update_position(electron):
+        """increment the position of the electron given its current speed, 
+        direction, and time-step used 
+
+        x_f = speed*direction*dt + x_i
+
+        Return:
+            electron (Electron object): with updated position vector
+        """
+        dx = electron.speed * electron.direction * dt
+        new_position = dx + electron.position 
+        electron.set_position(new_position)
+
+    update_direction(electron, magnet)
+    update_position(electron)
+
     return electron
+
 
 def electron_from_random_source():
     """Generate an electron from a random source
     """
-    energy = ''
-    direction = ''
-    position = ''
-    electron = Electron()
+
+    def random_energy_generator(e_min, e_max):
+        """Generate a random energy value between e_min and e_max
+
+        Args:
+            min (int): multiplier for the minimum range i.e. 3 for keV
+            max (int): multiplier for the maximum range i.e. 6 for MeV
+        """
+        # generate random energy electrons between 1 keV and 1 MeV
+        energy = np.random.random() * 10 ** (np.random.random_integers(e_min,e_max)) 
+        return energy 
+
+    def random_angle_generator(positive_and_negative=True):
+        """Generate a random launch angle for the electron
+        Args:
+
+        Return:
+            phi in units of radians
+        """
+        phi = np.arctan(PINHOLE_DIAMETER/(2*CROSS_POINT))
+        if positive_and_negative:
+            phi += np.random.choice([0.,np.pi/2.])
+        return phi 
+
+    energy = random_energy_generator(4,6)
+    phi = random_angle_generator()
+    direction = (np.cos(phi), np.sin(phi), 0.)  
+    position = (0.,0.,0.)
+    electron = Electron(energy)
     return electron
 
-def step(electron, magnet):
-    """Increment the simulation by one time step
+def set_up_detector_array(magnet):
+    """Set up the detector array with corresponding angles
     """
-    electron = update_direction(electron, magnet)
-    electron = update_position(electron)
+    detectors = []
+    detectors.append(Detector(16.0, magnet))
+    detectors.append(Detector(20.0, magnet))
+    detectors.append(Detector(43.5, magnet))
+    detectors.append(Detector(50.0, magnet))
+    detectors.append(Detector(64.5, magnet))
+    detectors.append(Detector(80.0, magnet))
+    detectors.append(Detector(100.0, magnet))
+    return detectors
+
+def final_report(data):
+    """Print out the detector responses
+    """
+    d = data['data']
+    plt.ion()
+    plt.plot(np.array(d['angle'])*180./np.pi,d['energy'], 'ro')
+    plt.yscale('log')
+    plt.draw()
+
+def simulate_trajectory(electron, magnet, mode='eulerian'):
+
+    while magnet.is_in_bounds(electron.position):
+        if mode == 'eulerian':
+            eularian_step(electron, magnet)
+        elif mode == 'RK':
+            runge_kutta_step(electron, magnet)
+
     return electron
 
-def run_traces():
 
-    for particle in PARTICLES:
-        electron = Electron()
-        while magnet.is_in_bounds(electron.position):
-            electron = step(electron, magnet)
+def run_traces(magnetic_field):
+    """Run the Simulation
 
+    Generate an electron from a random source, and move it through the applied
+    magnetic field. 
+
+    When electron has exited the field, check to see if it interacts with any
+    of the detectors in the array based on the trajectory of the electron.
+
+    Print out the final report
+    """
+
+    magnet = Magnet(magnetic_field)
+    detector_array = set_up_detector_array(magnet)
+    data = {'energy':[], 'angle':[]}
+
+    for particle_number in range(1,PARTICLES + 1):
+        electron = electron_from_random_source()
+
+        electron = simulate_trajectory(electron, magnet)
+
+        data['energy'].append(electron.energy('eV'))
+        data['angle'].append(np.arctan(electron.direction[1]/electron.direction[0]))
+        
+        for detector in detector_array:
+            detector.collision_detected(electron)
+
+        if particle_number % (PARTICLES/20) == 0:
+            completed_percent =  float(particle_number)/PARTICLES*100
+            print("\n\n" + "-"*50)
+            print("{}% completed".format(completed_percent))
+            map(lambda x: x.report(), detector_array)
+
+    return {'detectors':detector_array, 'data':data}
 
 if __name__ == '__main__':
-    magnet = import_magnet_data()
-    averaged_field = average_layers(magnet)
+    """Import magnetic field from excel file and run simulation
+    """
+    magnetic_field = import_magnet_data()
+    averaged_field = average_layers(magnetic_field)
+    data = run_traces(averaged_field)
+    final_report(data)
 
 
 
