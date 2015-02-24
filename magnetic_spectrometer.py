@@ -12,6 +12,7 @@ import warnings
 import numpy as np
 import matplotlib.pyplot as plt
 from multiprocessing import Pool
+import pickle
 
 ################################################################################
 #                               Constants                                      #
@@ -32,15 +33,17 @@ CONVERT_TO_UNITS = {
 #                               Parameters                                     #
 ################################################################################
 
-PARALLEL = True
-PARTICLES = 10**6
+PARALLEL = True # Run program on all available processors 
+PARTICLES = 10**5 # Number of particles in simulation
 BLOCK_NUMBER = 10
-PINHOLE_DIAMETER = 7*10**(-3) # mm
-CROSS_POINT = 70 *10**(-3) # mm   - distance from pinhole to the wire cross point
+PINHOLE_DIAMETER = 7*10**(-3) # m
+CROSS_POINT = 70 *10**(-3) # m   - distance from pinhole to the wire cross point
 MAGNETIC_MAPPING_FILE = './magnetic_mapping.xlsx' # location of magnet excel file  
 MAGNET_WIDTH = 25 * 10**(-3) # m
 MAGNET_LENGTH = 14 * 10**(-3) # m
 dt = 1.*10**-13 # Time step (s) 
+EMIN = 50 # Minimum energy in simulation (keV)
+EMAX = 5000 # maximum energy in simulation (keV)
 
 
 
@@ -53,12 +56,8 @@ class Electron(object):
     _m_0 = m_e # 9.10938291e-31 kg  rest mass of electron
     _q = e # 1.602176565e-19 Coulombs
 
-    def __init__(self, energy=10**5, position=None, direction=None):
-        if not position:
-            position = (0,0,0)
-        if not direction:
-            direction = (0,1,0)
-        
+    def __init__(self, energy=10**5, position=(0,0,0), direction=(0,1,0)):
+
         self.set_position(np.array(position, dtype='float')) # (x,y,z) m
         self.set_direction(np.array(direction, dtype='float')) # (vx_hat, vy_hat, vz_hat) m/s
         self._energy = float(energy) # eV
@@ -289,7 +288,7 @@ class Detector(object):
             faraday cup
     """
 
-    _aperture = 2*10**(-2) # m  a 1 cm aperture
+    _aperture = 6*10**(-3) # m  a 1 cm aperture
     _distance_from_origin = 10**(-1) # m 10 cm away from the origin
 
     def __init__(self, placement, magnet):
@@ -582,7 +581,7 @@ def electron_from_random_source():
         x_val = np.random.uniform(-PINHOLE_DIAMETER/2, PINHOLE_DIAMETER/2)
         return (x_val,0.,0.) 
 
-    energy = random_energy_generator(40,3000)
+    energy = random_energy_generator(EMIN,EMAX)
     phi = random_angle_generator()
     direction = (np.cos(phi), np.sin(phi), 0.)
     position = random_position_generator()
@@ -630,6 +629,8 @@ def final_report(data):
     tick_labels = [detector.placement for detector in detectors]
     ticks = np.arange(1,len(tick_labels))
     plt.xticks(ticks, tick_labels)
+    plt.xlabel("Detector Position")
+    plt.ylabel("Energy (keV)")
 
 
 def summary_report(histories, detector_array):
@@ -664,8 +665,17 @@ def simulate_trajectory(electron, magnet, mode='eulerian'):
     return electron
 
 
+def dump(obj, count):
+    """Save the detector array in a dump file
+
+    https://docs.python.org/2/library/pickle.html
+    """
+    filename = './dump.pk1'.format(count) 
+    with open(filename, 'wb') as output:
+        pickle.dump(obj, output, pickle.HIGHEST_PROTOCOL)
+
 def run_traces(magnetic_field):
-    """Run traces, if electron is caught in field None is returned. Assign another
+    """Run traces. If electron is caught in field None is returned, assign another
     energy to the electron and run again
     """
 
@@ -698,7 +708,7 @@ if __name__ == '__main__':
 
     detector_array = set_up_detector_array(magnet)
     data = {'energy':[], 'angle':[]}
-    block_end = int(PARTICLES/BLOCK_NUMBER)
+    block_count = int(PARTICLES/BLOCK_NUMBER)
     histories = 0
 
     while histories < PARTICLES:
@@ -706,10 +716,10 @@ if __name__ == '__main__':
         if PARALLEL:
             # start simulation in parallel on all available processors 
             processes = [pool.apply_async(run_traces, [magnet]) 
-                                for e in range(block_end)]
+                                for e in range(block_count)]
             electrons = [p.get() for p in processes]
         else:
-            electrons = [run_traces(magnet) for e in range(block_end)]
+            electrons = [run_traces(magnet) for e in range(block_count)]
 
         # record information for each electron in the run
         for electron in electrons:
@@ -720,6 +730,7 @@ if __name__ == '__main__':
 
         histories += len(electrons)
         summary_report(histories, detector_array) 
+        dump(detector_array)
 
     data =  {'detectors':detector_array, 'data':data}
     final_report(data)
