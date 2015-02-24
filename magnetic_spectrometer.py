@@ -33,10 +33,10 @@ CONVERT_TO_UNITS = {
 ################################################################################
 
 PARALLEL = True
-PARTICLES = 10**5
+PARTICLES = 10**6
 BLOCK_NUMBER = 10
-PINHOLE_DIAMETER = 7 # mm
-CROSS_POINT = 70 # mm   - distance from pinhole to the wire cross point
+PINHOLE_DIAMETER = 7*10**(-3) # mm
+CROSS_POINT = 70 *10**(-3) # mm   - distance from pinhole to the wire cross point
 MAGNETIC_MAPPING_FILE = './magnetic_mapping.xlsx' # location of magnet excel file  
 MAGNET_WIDTH = 25 * 10**(-3) # m
 MAGNET_LENGTH = 14 * 10**(-3) # m
@@ -53,7 +53,12 @@ class Electron(object):
     _m_0 = m_e # 9.10938291e-31 kg  rest mass of electron
     _q = e # 1.602176565e-19 Coulombs
 
-    def __init__(self, energy=10**3, position=(0,0,0), direction=(0,1,0)):
+    def __init__(self, energy=10**5, position=None, direction=None):
+        if not position:
+            position = (0,0,0)
+        if not direction:
+            direction = (0,1,0)
+        
         self.set_position(np.array(position, dtype='float')) # (x,y,z) m
         self.set_direction(np.array(direction, dtype='float')) # (vx_hat, vy_hat, vz_hat) m/s
         self._energy = float(energy) # eV
@@ -117,10 +122,15 @@ class Electron(object):
         return np.array(self._direction)
 
     @property
-    def phi(self):
+    def angle(self):
         """angle from the x axis in radians
+
+        Ignore the warning for arctan(inf)
         """
-        return np.arctan(self.direction[1]/self.direction[0])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            phi = np.arctan(self.direction[1]/self.direction[0])
+        return phi 
 
     def set_direction(self, new_direction):
         """Set the direction attribute of the particle
@@ -361,7 +371,7 @@ class Detector(object):
         """
         analysis = {}
         energies = np.fromiter(
-                map(lambda x:x.energy(), self.electrons_captured),
+                map(lambda x:x.energy()/1000., self.electrons_captured),
                 dtype=float
                 )
         if len(energies)>0:
@@ -370,6 +380,7 @@ class Detector(object):
             analysis['max'] = energies.max()
             analysis['min'] = energies.min()
             analysis['mean'] = energies.mean()
+            analysis['std'] = np.std(energies)
         else:
             analysis = None
 
@@ -379,16 +390,19 @@ class Detector(object):
         """Read out the analysis
         """
         analysis = self.analyze()
-        template = '''
-        \n
-        Detector location: {placement} deg
-        {count} number of tallies
-        maximum captured energy: {max} eV
-        minimum captured energy: {min} eV
-        Average captured energy: {mean} eV
-        \n
-        '''
-        print(template.format(placement=self.placement, **analysis))
+
+        print("Detector location: {} deg".format(self.placement)) 
+        if analysis:
+            template = '''
+            {count} number of tallies
+            maximum captured energy: {max:.3f} keV
+            minimum captured energy: {min:.3f} keV
+            Average captured energy: {mean:.3f} keV
+            Standard Deviation: {std:.3f} keV
+            '''
+            print(template.format(**analysis))
+        else:
+            print("No electrons captured")
 
 
 def import_magnet_data():
@@ -550,23 +564,31 @@ def electron_from_random_source():
         """
         return np.random.uniform(e_min, e_max) * 10**3
 
-    def random_angle_generator(positive_and_negative=True):
+    def random_angle_generator():
         """Generate a random launch angle for the electron
         Args:
 
         Return:
             phi in units of radians
         """
-        phi = np.arctan(PINHOLE_DIAMETER/(2*CROSS_POINT))
-        if positive_and_negative:
-            phi += np.random.choice([0.,np.pi/2.])
-        return phi 
+        min_phi = np.pi/2 - np.arctan(PINHOLE_DIAMETER/(2*CROSS_POINT))
+        max_phi = np.pi - min_phi
+        return np.random.uniform(min_phi,max_phi)
 
-    energy = random_energy_generator(100,1000)
+    def random_position_generator():
+        """Generate random value for the starting position of the electron 
+        between the limits of the pinhole size
+        """
+        x_val = np.random.uniform(-PINHOLE_DIAMETER/2, PINHOLE_DIAMETER/2)
+        return (x_val,0.,0.) 
+
+    energy = random_energy_generator(40,3000)
     phi = random_angle_generator()
-    direction = (np.cos(phi), np.sin(phi), 0.)  
-    position = (0.,0.,0.)
-    electron = Electron(energy)
+    direction = (np.cos(phi), np.sin(phi), 0.)
+    position = random_position_generator()
+    electron = Electron(energy=energy, 
+                        position=position,
+                        direction=direction)
     return electron
 
 def set_up_detector_array(magnet):
@@ -579,7 +601,7 @@ def set_up_detector_array(magnet):
     detectors.append(Detector(50.0, magnet))
     detectors.append(Detector(64.5, magnet))
     detectors.append(Detector(80.0, magnet))
-    detectors.append(Detector(100.0, magnet))
+    detectors.append(Detector(95.0, magnet))
     return detectors
 
 def final_report(data):
@@ -588,11 +610,27 @@ def final_report(data):
     d = data['data']
     plt.ion()
     plt.close('all')
+
+    plt.figure()
     plt.plot(np.array(d['angle'])*180./np.pi,np.array(d['energy'])/1000., 'ro')
     plt.xlabel("Degrees")
     plt.ylabel("Energy (keV)")
     #plt.yscale('log')
     plt.draw()
+    plt.figure()
+    detectors = data['detectors']
+    box_plot_data = []
+    for detector in detectors:
+        analysis = detector.analyze()
+        if analysis:
+            box_plot_data.append(analysis['energies'])
+        else:
+            box_plot_data.append([])
+    plt.boxplot(box_plot_data)
+    tick_labels = [detector.placement for detector in detectors]
+    ticks = np.arange(1,len(tick_labels))
+    plt.xticks(ticks, tick_labels)
+
 
 def summary_report(histories, detector_array):
     """Print update of simulation to console
@@ -600,7 +638,9 @@ def summary_report(histories, detector_array):
     completed_percent =  float(histories)/PARTICLES*100
     print("\n\n" + "-"*50)
     print("{}% completed".format(int(completed_percent)))
-    map(lambda x: x.report(), detector_array)
+
+    for detector in detector_array:
+        detector.report()
 
 def simulate_trajectory(electron, magnet, mode='eulerian'):
     """Move the electron forward using the appropriate scheme
@@ -611,14 +651,14 @@ def simulate_trajectory(electron, magnet, mode='eulerian'):
     caught in the magnetic field. 
     """
     while magnet.is_in_bounds(electron.position):
-        if electron.phi < np.pi and electron.phi > 0.:
+        if electron.angle < np.pi and electron.angle > 0.:
             if mode == 'eulerian':
                 eularian_step(electron, magnet)
             elif mode == 'RK':
                 runge_kutta_step(electron, magnet)
         else:
-            print("electron with energy ~ {:.3} keV caught in loop".format(
-                                    electron.energy()/1000))
+            #print("electron with energy ~ {:.3f} keV caught in loop".format(
+            #                        electron.energy()/1000))
             return None
 
     return electron
@@ -674,7 +714,7 @@ if __name__ == '__main__':
         # record information for each electron in the run
         for electron in electrons:
             data['energy'].append(electron.energy())
-            data['angle'].append(electron.phi)
+            data['angle'].append(electron.angle)
             for detector in detector_array:
                 detector.collision_detected(electron)
 
