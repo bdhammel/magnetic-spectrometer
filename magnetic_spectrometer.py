@@ -36,13 +36,13 @@ CONVERT_TO_UNITS = {
 PARALLEL = True # Run program on all available processors 
 PARTICLES = 10**5 # Number of particles in simulation
 BLOCK_NUMBER = 10
-PINHOLE_DIAMETER = 7*10**(-3) # m
+PINHOLE_DIAMETER = 4*10**(-3) # m
 CROSS_POINT = 70 *10**(-3) # m   - distance from pinhole to the wire cross point
 MAGNETIC_MAPPING_FILE = './magnetic_mapping.xlsx' # location of magnet excel file  
 MAGNET_WIDTH = 25 * 10**(-3) # m
 MAGNET_LENGTH = 14 * 10**(-3) # m
 dt = 1.*10**-13 # Time step (s) 
-EMIN = 50 # Minimum energy in simulation (keV)
+EMIN = 30 # Minimum energy in simulation (keV)
 EMAX = 5000 # maximum energy in simulation (keV)
 
 
@@ -186,6 +186,12 @@ class Magnet(object):
     """
 
     def __init__(self, field, physical_dimensions=(MAGNET_WIDTH, MAGNET_LENGTH,0.)):
+        """
+        Args:
+            field:
+            physical_dimensions 
+                Magnetic_WIdth: 
+        """
         self._field = np.array(field)
         self._physical_dimensions = np.array(physical_dimensions)
 
@@ -282,13 +288,13 @@ class Detector(object):
         e coor-sys -> fc coor-sys :(x,y) -> (x,y-y_max) = (x',y')
 
     Attributes:
-        aperture (float): The opening of the faraday cup
+        aperture (float): The diameter opening of the faraday cup
         placement (float): The location of the faraday cup in degrees
         electrons_captured (Electron): array of all electrons that intersect the
             faraday cup
     """
 
-    _aperture = 6*10**(-3) # m  a 1 cm aperture
+    _aperture = 5*10**(-3) # m  a 1 cm aperture
     _distance_from_origin = 10**(-1) # m 10 cm away from the origin
 
     def __init__(self, placement, magnet):
@@ -373,6 +379,7 @@ class Detector(object):
                 map(lambda x:x.energy()/1000., self.electrons_captured),
                 dtype=float
                 )
+        print(len(self.electrons_captured))
         if len(energies)>0:
             analysis['energies'] = energies
             analysis['count'] = len(energies)
@@ -594,13 +601,11 @@ def set_up_detector_array(magnet):
     """Set up the detector array with corresponding angles
     """
     detectors = []
-    detectors.append(Detector(16.0, magnet))
     detectors.append(Detector(20.0, magnet))
-    detectors.append(Detector(43.5, magnet))
-    detectors.append(Detector(50.0, magnet))
-    detectors.append(Detector(64.5, magnet))
+    detectors.append(Detector(40.0, magnet))
+    detectors.append(Detector(60.0, magnet))
     detectors.append(Detector(80.0, magnet))
-    detectors.append(Detector(95.0, magnet))
+    detectors.append(Detector(100.0, magnet))
     return detectors
 
 def final_report(data):
@@ -730,7 +735,7 @@ if __name__ == '__main__':
 
         histories += len(electrons)
         summary_report(histories, detector_array) 
-        dump(detector_array)
+        #dump(detector_array)
 
     data =  {'detectors':detector_array, 'data':data}
     final_report(data)
