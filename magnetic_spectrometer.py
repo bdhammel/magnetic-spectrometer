@@ -11,8 +11,12 @@ import xlrd
 import warnings
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 from multiprocessing import Pool
+from scipy.interpolate import interp2d
 import pickle
+
+mpl.rc('font', family='serif', size=18)
 
 ################################################################################
 #                               Constants                                      #
@@ -34,16 +38,16 @@ CONVERT_TO_UNITS = {
 ################################################################################
 
 PARALLEL = True # Run program on all available processors 
-PARTICLES = 10**5 # Number of particles in simulation
+PARTICLES = 10**4 # Number of particles in simulation
 BLOCK_NUMBER = 10
-PINHOLE_DIAMETER = 4*10**(-3) # m
-CROSS_POINT = 70 *10**(-3) # m   - distance from pinhole to the wire cross point
+PINHOLE_DIAMETER = 2*10**(-3) # m
+CROSS_POINT = 10 *10**(-3) # m   - distance from pinhole to the wire cross point
 MAGNETIC_MAPPING_FILE = './magnetic_mapping.xlsx' # location of magnet excel file  
-MAGNET_WIDTH = 25 * 10**(-3) # m
-MAGNET_LENGTH = 14 * 10**(-3) # m
+MAGNET_WIDTH = 24 * 10**(-3) # m
+MAGNET_LENGTH = 24 * 10**(-3) # m
 dt = 1.*10**-13 # Time step (s) 
 EMIN = 30 # Minimum energy in simulation (keV)
-EMAX = 5000 # maximum energy in simulation (keV)
+EMAX = 9000 # maximum energy in simulation (keV)
 
 
 
@@ -294,7 +298,7 @@ class Detector(object):
             faraday cup
     """
 
-    _aperture = 5*10**(-3) # m  a 1 cm aperture
+    _aperture = 5*10**(-3) # m  a 5mm diameter aperture
     _distance_from_origin = 10**(-1) # m 10 cm away from the origin
 
     def __init__(self, placement, magnet):
@@ -379,7 +383,6 @@ class Detector(object):
                 map(lambda x:x.energy()/1000., self.electrons_captured),
                 dtype=float
                 )
-        print(len(self.electrons_captured))
         if len(energies)>0:
             analysis['energies'] = energies
             analysis['count'] = len(energies)
@@ -463,6 +466,16 @@ def average_layers(magnet):
 
     Nan's are ignored in the averaging. If all values are nan then the average 
     is saved as 0
+
+    Parameters
+    ----------
+    magnet : ndarray
+        magnetic field values in kgauss
+
+    Returns
+    -------
+    ndarray
+        value in Tesla
     """
     i_length, j_length, k_length = magnet.shape
 
@@ -478,7 +491,32 @@ def average_layers(magnet):
             if not np.isnan(averaged_value):
                 averaged_field[i,j] = averaged_value
 
-    return averaged_field
+    return averaged_field*.1 # Convert to Tesla
+
+def smooth(values, x_max=MAGNET_WIDTH, y_max=MAGNET_LENGTH):
+    plt.close('all')
+    x = np.linspace(0,x_max,values.shape[1])
+    y = np.linspace(0,y_max,values.shape[0])
+    plt.pcolor(x*1000, y*1000, values)
+    plt.gca().set_aspect('equal', adjustable='box')
+    plt.ylim(0,x_max*1000)
+    plt.xlim(0,y_max*1000)
+    f = interp2d(x, y, values, kind='cubic')
+    x = np.linspace(0,x_max,300)
+    y = np.linspace(0,y_max,300)
+    plt.figure()
+    values = f(x,y)
+    values[values<0] = 0
+    plt.pcolor(x*1000-16, y*1000-24, 10000*values)
+    plt.gca().set_aspect('equal', adjustable='box')
+    cb = plt.colorbar()
+    plt.xlim(-16,8)
+    plt.ylim(-24,0)
+    plt.xlabel("x (mm)")
+    plt.ylabel("y (mm)")
+    xx, yy = np.meshgrid(x, y)
+    cb.set_label("Gauss")
+    return xx, yy, values
 
 
 def runge_kutta_step(electron, magnet):
@@ -524,7 +562,7 @@ def eularian_step(electron, magnet):
 
         v=s*d_hat
 
-        Args:* energy_multiplyer
+        Args:
             electron (Electron object): electron at current location and direction 
             magnet (Magnet object): The current magnetic field being used in the 
                 simulation
@@ -564,18 +602,25 @@ def electron_from_random_source():
     def random_energy_generator(e_min, e_max):
         """Generate a random energy value between e_min and e_max
 
-        Args:
-            min (int): minimum val in keV
-            max (int): maximum val in keV
+        Parameters
+        ----------
+        min : int
+            minimum val in keV
+        max : int 
+            maximum val in keV
         """
         return np.random.uniform(e_min, e_max) * 10**3
 
     def random_angle_generator():
         """Generate a random launch angle for the electron
-        Args:
 
-        Return:
-            phi in units of radians
+        Using pinhole diameter and the distance from the crossing point, 
+        generate a possible launch angle for the electron
+
+        Return
+        ------
+        phi : float
+            units of radians
         """
         min_phi = np.pi/2 - np.arctan(PINHOLE_DIAMETER/(2*CROSS_POINT))
         max_phi = np.pi - min_phi
@@ -588,6 +633,7 @@ def electron_from_random_source():
         x_val = np.random.uniform(-PINHOLE_DIAMETER/2, PINHOLE_DIAMETER/2)
         return (x_val,0.,0.) 
 
+    np.random.seed()
     energy = random_energy_generator(EMIN,EMAX)
     phi = random_angle_generator()
     direction = (np.cos(phi), np.sin(phi), 0.)
@@ -631,11 +677,19 @@ def final_report(data):
         else:
             box_plot_data.append([])
     plt.boxplot(box_plot_data)
+    plt.yscale('log')
     tick_labels = [detector.placement for detector in detectors]
     ticks = np.arange(1,len(tick_labels))
     plt.xticks(ticks, tick_labels)
     plt.xlabel("Detector Position")
     plt.ylabel("Energy (keV)")
+    ax = plt.gca()
+    plt.xlim(.5,4.5)
+    plt.grid(which='both')
+    ax.set_xticklabels([r"20${}^\circ$", r"40${}^\circ$", r"60${}^\circ$", r"80${}^\circ$"])
+    for line in plt.gca().lines:
+        line.set_linewidth(2)
+    plt.tight_layout()
 
 
 def summary_report(histories, detector_array):
@@ -651,7 +705,7 @@ def summary_report(histories, detector_array):
 def simulate_trajectory(electron, magnet, mode='eulerian'):
     """Move the electron forward using the appropriate scheme
 
-    NOTE(RK method isn't working...)
+    NOTE(RK doesn't do shit for speeding up the code)
 
     Check to make sure the angle of the electron is such that it doesn't get 
     caught in the magnetic field. 
@@ -703,10 +757,11 @@ if __name__ == '__main__':
 
     Print out the final report
     """
+    
 
     #Import magnetic field from excel file and run simulation
     magnetic_field = import_magnet_data()
-    averaged_field = average_layers(magnetic_field)*.1 # imported field in kgauss
+    averaged_field = average_layers(magnetic_field)
     magnet = Magnet(averaged_field)
 
     pool = Pool()

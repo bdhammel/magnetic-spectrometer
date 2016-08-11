@@ -260,7 +260,7 @@ class SimulationTestCase(unittest.TestCase):
         electron = Electron(energy=5*10**5)
         phi = np.arccos(y_max*electron.q*field_strength/(electron.m*electron.speed))
         electron = simulate_trajectory(electron, magnet)
-        nptest.assert_approx_equal(electron.phi*180/np.pi, phi*180/np.pi)
+        nptest.assert_approx_equal(electron.angle*180/np.pi, phi*180/np.pi)
 
 
 if __name__ == '__main__':
