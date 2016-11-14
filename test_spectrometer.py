@@ -17,7 +17,7 @@ class ElectronTest(unittest.TestCase):
 
         http://hyperphysics.phy-astr.gsu.edu/hbase/relativ/releng.html
         """
-        speed_for_MeV_e = 2.821257804478669*10**8 # m/s
+        speed_for_MeV_e = 28212.5780447867 # cm/us 
         nptest.assert_approx_equal(self.electron.speed, speed_for_MeV_e, SIG_FIG_ACCURACY)
 
     def test_gamma(self):
@@ -35,12 +35,12 @@ class ElectronTest(unittest.TestCase):
         mass_of_MeV_e = gamma*m_e
         nptest.assert_approx_equal(self.electron.m, mass_of_MeV_e, SIG_FIG_ACCURACY)
 
-    def test_energy_in_jouls(self):
+    def test_energy_in_eng_units(self):
         """Check that the correct value for energy is returned. 
-        Check the conversion of eV to Joules
+        Check the conversion of eV to g cm2 us-2
         """
-        expected_energy = 1.6019999999999999 * 10**(-13)
-        calculated_energy = self.electron.energy("Joules")
+        expected_energy = 1.602e-18 # g cm2 us-2
+        calculated_energy = self.electron.energy("eng")
         nptest.assert_approx_equal(calculated_energy, expected_energy, SIG_FIG_ACCURACY)
 
     def test_electron_cant_have_non_0_z_position(self):
@@ -72,14 +72,18 @@ class MagnetTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         field = np.ones((11,6))
-        cls.x_max = 20*10**(-3)
-        cls.y_max = 10*10**(-3)
-        cls.magnet = Magnet(field, (cls.x_max, cls.y_max, 0.))
+        cls.x_max = 2.0
+        cls.y_max = 2.4
+
+        x = np.linspace(-cls.x_max/2., cls.x_max/2., field.shape[1])
+        y = np.linspace(-cls.y_max, 0., field.shape[0])
+        xx, yy = np.meshgrid(x, y)
+        cls.magnet = Magnet(field, xx, yy)
 
     def test_map_physical_orgin_to_logic(self):
         """Check that the correct logic location is returned for the origin 
         """
-        expected_logic_coor = [5, 0]
+        expected_logic_coor = [10, 2]
         logic_coor = self.magnet.map_physical_space_to_logic_space((0,0,0))
         nptest.assert_array_equal(logic_coor, expected_logic_coor)
 
@@ -87,8 +91,8 @@ class MagnetTest(unittest.TestCase):
         """Check that the correct logic location is returned for the minimum x
         distance
         """
-        expected_logic_coor = [0, 0]
-        pos = (-self.x_max/2,0,0)
+        expected_logic_coor = [10, 0]
+        pos = (-self.x_max/2.,0,0)
         logic_coor = self.magnet.map_physical_space_to_logic_space(pos)
         nptest.assert_array_equal(logic_coor, expected_logic_coor)
 
@@ -96,7 +100,7 @@ class MagnetTest(unittest.TestCase):
     def test_position_on_boundary(self):
         """Check that a particle on the boundary is treated as inside
         """
-        self.assertTrue(self.magnet.is_in_bounds((self.x_max/2., self.y_max, 0.)))
+        self.assertTrue(self.magnet.is_in_bounds((self.x_max/2., 0., 0.)))
 
     def test_x_position_out_of_bounds(self):
         """Check that the magnet successfully tests for the boundaries
@@ -104,7 +108,7 @@ class MagnetTest(unittest.TestCase):
         Move particle outside the boundary by the significant figure accuracy in 
         mm
         """
-        outside = self.x_max/2 + 10**(-SIG_FIG_ACCURACY) * 10**(-3)
+        outside = self.x_max/2 + 10**(-SIG_FIG_ACCURACY) 
         self.assertFalse(self.magnet.is_in_bounds((outside, 0, 0.)))
 
     def test_y_position_out_of_bounds(self):
@@ -113,41 +117,48 @@ class MagnetTest(unittest.TestCase):
         Move particle outside the boundary by the significant figure accuracy in 
         mm
         """
-        outside = self.y_max + 10**(-SIG_FIG_ACCURACY) * 10**(-3)
+        outside = 10**(-SIG_FIG_ACCURACY) 
         self.assertFalse(self.magnet.is_in_bounds((0., outside, 0.)))
+    
+    def test_far_right_coor(self):
+        nptest.assert_array_equal(
+                self.magnet.map_physical_space_to_logic_space((self.x_max/2., 0.,0.)),
+                self.magnet.logic_count)
+
+    def test_inbounds(self):
+        self.assertTrue(self.magnet.is_in_bounds((0., 0, 0.)))
+        self.assertTrue(self.magnet.is_in_bounds((-self.x_max/2., 0, 0.)))
+        self.assertTrue(self.magnet.is_in_bounds((self.x_max/2., 0, 0.)))
+        self.assertTrue(self.magnet.is_in_bounds((0, -self.y_max, 0.)))
+
+
+
 
 class DetectorTest(unittest.TestCase): 
     @classmethod
     def setUpClass(cls):
-        cls.x_max = 20*10**(-3)
-        cls.y_max = 10*10**(-3)
+        cls.x_max = 2.0
+        cls.y_max = 1.0
         field = np.ones((11,6))
         cls.electron = Electron(energy=10**6) 
-        cls.distance_outside = 10**(-3) * 10**(-SIG_FIG_ACCURACY)
-        cls.electron.set_position((cls.x_max/4, cls.y_max+cls.distance_outside, 0.))
-        cls.magnet = Magnet(field, (cls.x_max, cls.y_max, 0.))
-        cls.detector = Detector(15.,cls.magnet)
+        cls.distance_outside = 1.0 * 10**(-SIG_FIG_ACCURACY)
+        cls.electron.set_position((0., 0., 0.))
 
-    def test_shift_to_detector_coordinate_system(self):
-        """Check that an electron's position is correctly mapped into the 
-        coordinate system of the detector
-        """
-        new_position = self.detector.detector_coor_sys(self.electron.position)
-        nptest.assert_array_almost_equal(
-                                    new_position,
-                                    [self.x_max/4, self.distance_outside, 0.],
-                                    SIG_FIG_ACCURACY+3
-                                    )
+        x = np.linspace(-cls.x_max/2., cls.x_max/2., field.shape[1])
+        y = np.linspace(0, cls.y_max, field.shape[0])
+        xx, yy = np.meshgrid(x, y)
+        cls.magnet = Magnet(field, xx, yy)
+        cls.detector = Detector(15.,cls.magnet)
 
     def test_direct_hit(self):
         """Check to see if an electron is captured from a direct hit onto the
         detector.
         """
         # Sanity check, electron is just outside of the magnet
-        self.assertFalse(self.magnet.is_in_bounds(self.electron.position))
+        #self.assertFalse(self.magnet.is_in_bounds(self.electron.position))
         # Set direction with law of sines
         # sin(a)/A=sin(c)/C
-        P = self.detector.detector_coor_sys(self.electron.position)
+        P = self.electron.position
         C = self.detector.distance
         A = np.linalg.norm(self.detector.vector_location - P)
         a = self.detector.theta
@@ -166,9 +177,10 @@ class DetectorTest(unittest.TestCase):
         """
         direction = ( self.detector.vector_location / 
                         np.linalg.norm(self.detector.vector_location) )
+
         electron = Electron(
                         energy=10**4, 
-                        position=(0,self.y_max,0),
+                        position=(0,0,0),
                         direction=direction
                         )
         #sanity check
@@ -176,27 +188,28 @@ class DetectorTest(unittest.TestCase):
 
         self.assertIsNotNone(self.detector.analyze())
 
-    def test_indirect_hit(self):
-        """
-        """
-        pass
 
 class SimulationTestCase(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
         cls.phi = np.pi/6. # angle particle should leave the field
-        cls.x_max = 20*10**(-3)
-        cls.y_max = 10*10**(-3)
-        cls.electron = Electron(energy=10**4)
+        cls.x_max = 2.4
+        cls.y_max = 1.0
+        cls.electron = Electron(energy=10**4, position=(0., -cls.y_max, 0.))
         cls.B_strength = ( (np.cos(cls.phi)*cls.electron.m*cls.electron.speed) /
-                           (cls.y_max*cls.electron.q) )
-        field = np.empty((11,6))
+                           (cls.y_max*cls.electron.q) )*10**3  # convert to Tesla
+        field = np.empty((100,60))
         field.fill(cls.B_strength)
-        cls.magnet = Magnet(field, (cls.x_max, cls.y_max, 0.))
-        cls.detector = Detector(30.,cls.magnet)
+
+        x = np.linspace(-cls.x_max/2., cls.x_max/2., field.shape[1])
+        y = np.linspace(-cls.y_max, 0., field.shape[0])
+        xx, yy = np.meshgrid(x, y)
+        cls.magnet = Magnet(field, xx, yy)
+
+        cls.detector = Detector(30., cls.magnet)
         cls.r =( (cls.electron.m*cls.electron.speed) /  
-                 (cls.electron.q*cls.B_strength) ) 
+                 (cls.electron.q*cls.B_strength*10**(-3)) ) 
 
     def test_correct_exsit_angle(self):
         """Check that the electron exist the magnet at the expected angle
@@ -237,7 +250,7 @@ class SimulationTestCase(unittest.TestCase):
         """Check that the electron exist the magnet at the expected position 
         """
         electron = simulate_trajectory(self.electron, self.magnet)
-        y = self.y_max
+        y = 0.
         x = self.r - self.r * np.cos(np.pi/2 - self.phi)
         expected_position = np.array([x,y,0.])
         calculated_position = electron.position
@@ -248,19 +261,24 @@ class SimulationTestCase(unittest.TestCase):
                                 )
 
     def test_average_field(self):
-        """Check trajectory through a field of strength .08 T ~ the average field
+        """Check trajectory through a field of strength .03 T ~ the average field
         strength of the magnet. Compare to analytical solution 
         """
-        x_max = 25 * 10**(-3) # m
-        y_max = 14 * 10**(-3) # m
-        field = np.empty((11,6))
-        field_strength = .08
+        x_max = 2.5  # cm
+        y_max = 1.4  # cm
+        field = np.empty((300,180))
+        field_strength = .03 # T    
         field.fill(field_strength)
-        magnet = Magnet(field, (x_max, y_max, 0.))
-        electron = Electron(energy=5*10**5)
-        phi = np.arccos(y_max*electron.q*field_strength/(electron.m*electron.speed))
+
+        x = np.linspace(-x_max/2., x_max/2., field.shape[1])
+        y = np.linspace(-y_max, 0, field.shape[0])
+        xx, yy = np.meshgrid(x, y)
+        magnet = Magnet(field, xx, yy)
+        electron = Electron(energy=5*10**5, position=(0., -y_max, 0.))
+        r = (electron.m*electron.speed)/(electron.q*field_strength*10**(-3))
+        phi = np.arccos(y_max/r)
         electron = simulate_trajectory(electron, magnet)
-        nptest.assert_approx_equal(electron.angle*180/np.pi, phi*180/np.pi)
+        nptest.assert_approx_equal(electron.angle*180/np.pi, phi*180./np.pi)
 
 
 if __name__ == '__main__':
